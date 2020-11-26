@@ -1,0 +1,6 @@
+language: java
+os:
+    - linux
+jdk:
+    - oraclejdk8
+script:  mvn -U clean package -DskipTests -Dfast
