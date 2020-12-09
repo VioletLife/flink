@@ -4,3 +4,4 @@ os:
 jdk:
     - oraclejdk8
 script:  mvn -U clean package -DskipTests -Dfast
+dist: trusty
