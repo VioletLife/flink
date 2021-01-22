@@ -38,12 +38,18 @@ for which you have a known fixed input and which do not run continuously.
 
 Apache Flink's unified approach to stream and batch processing means that a
 DataStream application executed over bounded input will produce the same
-results regardless of the configured execution mode. By enabling `BATCH`
-execution, we allow Flink to apply additional optimizations that we can only do
-when we know that our input is bounded. For example, different join/aggregation
-strategies can be used, in addition to a different shuffle implementation that
-allows more efficient task scheduling and failure recovery behavior. We will go
-into some of the details of the execution behavior below.
+*final* results regardless of the configured execution mode. It is important to
+note what *final* means here: a job executing in `STREAMING` mode might produce
+incremental updates (think upserts in a database) while a `BATCH` job would
+only produce one final result at the end. The final result will be the same if
+interpreted correctly but the way to get there can be different.
+
+By enabling `BATCH` execution, we allow Flink to apply additional optimizations
+that we can only do when we know that our input is bounded. For example,
+different join/aggregation strategies can be used, in addition to a different
+shuffle implementation that allows more efficient task scheduling and failure
+recovery behavior. We will go into some of the details of the execution
+behavior below.
 
 * This will be replaced by the TOC
 {:toc}
@@ -231,6 +237,35 @@ next key.
 See [FLIP-140](https://cwiki.apache.org/confluence/x/kDh4CQ) for background
 information on this.
 
+### Order of Processing
+
+The order in which records are processed in operators or user-defined functions (UDFs) can differ between `BATCH` and `STREAMING` execution.
+
+In `STREAMING` mode, user-defined functions should not make any assumptions about incoming records' order.
+Data is processed as soon as it arrives.
+
+In `BATCH` execution mode, there are some operations where Flink guarantees order. 
+The ordering can be a side effect of the particular task scheduling,
+network shuffle, and state backend (see above), or a conscious choice by the system.
+
+There are three general types of input that we can differentiate:
+
+- _broadcast input_: input from a broadcast stream (see also [Broadcast
+  State]({% link dev/stream/state/broadcast_state.md %}))
+- _regular input_: input that is neither broadcast nor keyed
+- _keyed input_: input from a `KeyedStream`
+
+Functions, or Operators, that consume multiple input types will process them in the following order:
+
+- broadcast inputs are processed first
+- regular inputs are processed second
+- keyed inputs are processed last
+
+For functions that consume from multiple regular or broadcast inputs &mdash; such as a `CoProcessFunction` &mdash; Flink has the right to process data from any input of that type in any order.
+
+For functions that consume from multiple keyed inputs &mdash; such as a `KeyedCoProcessFunction` &mdash; Flink processes all records for a single key from all keyed inputs before moving on to the next. 
+
+
 ### Event Time / Watermarks
 
 When it comes to supporting [event time]({% link dev/event_time.md %}), Flink’s
@@ -252,8 +287,9 @@ streaming, in `BATCH` we can assume “perfect watermarks”.
 Given the above, in `BATCH` mode, we only need a `MAX_WATERMARK` at the end of
 the input associated with each key, or at the end of input if the input stream
 is not keyed. Based on this scheme, all registered timers will fire at the *end
-of time* and user-defined `WatermarkAssigners` or `WatermarkStrategies` are
-ignored.
+of time* and user-defined `WatermarkAssigners` or `WatermarkGenerators` are
+ignored. Specifying a `WatermarkStrategy` is still important, though, because
+its `TimestampAssigner` will still be used to assign timestamps to records.
 
 ### Processing Time
 
@@ -322,7 +358,6 @@ Unsupported in BATCH mode:
 * [Checkpointing]({% link concepts/stateful-stream-processing.md
   %}#stateful-stream-processing) and any operations that depend on
   checkpointing do not work.
-* [Broadcast State]({% link dev/stream/state/broadcast_state.md %})
 * [Iterations]({% link dev/stream/operators/index.md %}#iterate)
 
 Custom operators should be implemented with care, otherwise they might behave
@@ -346,26 +381,6 @@ a result,  Kafka's [EXACTLY_ONCE]({% link dev/connectors/kafka.md %}
 You can still use all the [state primitives]({% link dev/stream/state/state.md
 %}#working-with-state), it's just that the mechanism used for failure recovery
 will be different.
-
-### Broadcast State
-
-This feature was introduced to allow users to implement use-cases where a
-“control” stream needs to be broadcast to all downstream tasks, and the
-broadcast elements, e.g. rules, need to be applied to all incoming elements
-from another stream.
-
-In this pattern, Flink provides no guarantees about the order in which the
-inputs are read.  Use-cases like the one above make sense in the streaming
-world where jobs are expected to run for a long period with input data that are
-not known in advance. In these settings, requirements may change over time
-depending on the incoming data.
-
-In the batch world though, we believe that such use-cases do not make much
-sense, as the input (both the elements and the control stream) are static and
-known in advance.
-
-We plan to support a variation of that pattern for `BATCH` processing where the
-broadcast side is processed first entirely in the future.
 
 ### Writing Custom Operators
 

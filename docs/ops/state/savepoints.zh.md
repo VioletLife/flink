@@ -72,7 +72,7 @@ mapper-id   | State of StatefulMapper
 
 ## 算子
 
-你可以使用[命令行客户端]({% link ops/cli.zh.md %}#Savepoint)来*触发 Savepoint*，*触发 Savepoint 并取消作业*，*从 Savepoint* 恢复，以及*删除 Savepoint*。
+你可以使用[命令行客户端]({% link deployment/cli.zh.md %}#Savepoint)来*触发 Savepoint*，*触发 Savepoint 并取消作业*，*从 Savepoint* 恢复，以及*删除 Savepoint*。
 
 从 Flink 1.2.0 开始，还可以使用 webui *从 Savepoint 恢复*。
 
@@ -164,7 +164,7 @@ $ bin/flink savepoint -d :savepointPath
 
 ### 配置
 
-你可以通过 `state.savepoint.dir` 配置 savepoint 的默认目录。 触发 savepoint 时，将使用此目录来存储 savepoint。 你可以通过使用触发器命令指定自定义目标目录来覆盖缺省值（请参阅[`:targetDirectory`参数](#触发-savepoint-1)）。
+你可以通过 `state.savepoints.dir` 配置 savepoint 的默认目录。 触发 savepoint 时，将使用此目录来存储 savepoint。 你可以通过使用触发器命令指定自定义目标目录来覆盖缺省值（请参阅[`:targetDirectory`参数](#触发-savepoint-1)）。
 
 
 {% highlight yaml %}
