@@ -80,8 +80,7 @@ public class JobGraph implements Serializable {
     /** Name of this job. */
     private final String jobName;
 
-    /** The mode in which the job is scheduled. */
-    private ScheduleMode scheduleMode = ScheduleMode.LAZY_FROM_SOURCES;
+    private JobType jobType = JobType.BATCH;
 
     /**
      * Whether approximate local recovery is enabled. This flag will be removed together with legacy
@@ -231,12 +230,12 @@ public class JobGraph implements Serializable {
         return serializedExecutionConfig;
     }
 
-    public void setScheduleMode(ScheduleMode scheduleMode) {
-        this.scheduleMode = scheduleMode;
+    public void setJobType(JobType type) {
+        this.jobType = type;
     }
 
-    public ScheduleMode getScheduleMode() {
-        return scheduleMode;
+    public JobType getJobType() {
+        return jobType;
     }
 
     public void enableApproximateLocalRecovery(boolean enabled) {

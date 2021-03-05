@@ -32,11 +32,14 @@ import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.typeutils.MissingTypeInfo;
+import org.apache.flink.core.fs.Path;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
+import org.apache.flink.runtime.clusterframework.types.ResourceProfile;
 import org.apache.flink.runtime.jobgraph.JobGraph;
+import org.apache.flink.runtime.jobgraph.JobType;
 import org.apache.flink.runtime.jobgraph.SavepointRestoreSettings;
-import org.apache.flink.runtime.jobgraph.ScheduleMode;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
+import org.apache.flink.runtime.state.CheckpointStorage;
 import org.apache.flink.runtime.state.StateBackend;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
@@ -68,6 +71,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
@@ -91,8 +95,6 @@ public class StreamGraph implements Pipeline {
     private final CheckpointConfig checkpointConfig;
     private SavepointRestoreSettings savepointRestoreSettings = SavepointRestoreSettings.none();
 
-    private ScheduleMode scheduleMode;
-
     private boolean chaining;
 
     private Collection<Tuple2<String, DistributedCache.DistributedCacheEntry>> userArtifacts;
@@ -113,8 +115,12 @@ public class StreamGraph implements Pipeline {
     protected Map<Integer, String> vertexIDtoBrokerID;
     protected Map<Integer, Long> vertexIDtoLoopTimeout;
     private StateBackend stateBackend;
+    private CheckpointStorage checkpointStorage;
+    private Path savepointDir;
     private Set<Tuple2<StreamNode, StreamNode>> iterationSourceSinkPairs;
     private InternalTimeServiceManager.Provider timerServiceProvider;
+    private JobType jobType = JobType.STREAMING;
+    private Map<String, ResourceProfile> slotSharingGroupResources;
 
     public StreamGraph(
             ExecutionConfig executionConfig,
@@ -138,6 +144,7 @@ public class StreamGraph implements Pipeline {
         iterationSourceSinkPairs = new HashSet<>();
         sources = new HashSet<>();
         sinks = new HashSet<>();
+        slotSharingGroupResources = new HashMap<>();
     }
 
     public ExecutionConfig getExecutionConfig() {
@@ -176,20 +183,28 @@ public class StreamGraph implements Pipeline {
         return this.stateBackend;
     }
 
+    public void setCheckpointStorage(CheckpointStorage checkpointStorage) {
+        this.checkpointStorage = checkpointStorage;
+    }
+
+    public CheckpointStorage getCheckpointStorage() {
+        return this.checkpointStorage;
+    }
+
+    public void setSavepointDirectory(Path savepointDir) {
+        this.savepointDir = savepointDir;
+    }
+
+    public Path getSavepointDirectory() {
+        return this.savepointDir;
+    }
+
     public InternalTimeServiceManager.Provider getTimerServiceProvider() {
         return timerServiceProvider;
     }
 
     public void setTimerServiceProvider(InternalTimeServiceManager.Provider timerServiceProvider) {
         this.timerServiceProvider = checkNotNull(timerServiceProvider);
-    }
-
-    public ScheduleMode getScheduleMode() {
-        return scheduleMode;
-    }
-
-    public void setScheduleMode(ScheduleMode scheduleMode) {
-        this.scheduleMode = scheduleMode;
     }
 
     public Collection<Tuple2<String, DistributedCache.DistributedCacheEntry>> getUserArtifacts() {
@@ -215,6 +230,15 @@ public class StreamGraph implements Pipeline {
 
     public void setGlobalDataExchangeMode(GlobalDataExchangeMode globalDataExchangeMode) {
         this.globalDataExchangeMode = globalDataExchangeMode;
+    }
+
+    public void setSlotSharingGroupResource(
+            Map<String, ResourceProfile> slotSharingGroupResources) {
+        this.slotSharingGroupResources.putAll(slotSharingGroupResources);
+    }
+
+    public Optional<ResourceProfile> getSlotSharingGroupResource(String groupId) {
+        return Optional.ofNullable(slotSharingGroupResources.get(groupId));
     }
 
     /**
@@ -920,5 +944,13 @@ public class StreamGraph implements Pipeline {
         return typeInfo != null && !(typeInfo instanceof MissingTypeInfo)
                 ? typeInfo.createSerializer(executionConfig)
                 : null;
+    }
+
+    public void setJobType(JobType jobType) {
+        this.jobType = jobType;
+    }
+
+    public JobType getJobType() {
+        return jobType;
     }
 }

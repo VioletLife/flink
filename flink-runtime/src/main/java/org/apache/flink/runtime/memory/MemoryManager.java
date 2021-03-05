@@ -218,7 +218,7 @@ public class MemoryManager {
         Preconditions.checkState(!isShutDown, "Memory manager has been shut down.");
         Preconditions.checkArgument(
                 numberOfPages <= totalNumberOfPages,
-                "Cannot allocate more segments %d than the max number %d",
+                "Cannot allocate more segments %s than the max number %s",
                 numberOfPages,
                 totalNumberOfPages);
 
@@ -540,7 +540,12 @@ public class MemoryManager {
                                 e);
                     }
 
-                    return initializer.apply(size);
+                    try {
+                        return initializer.apply(size);
+                    } catch (Throwable t) {
+                        releaseMemory(type, size);
+                        throw t;
+                    }
                 };
 
         final Consumer<Long> releaser = (size) -> releaseMemory(type, size);

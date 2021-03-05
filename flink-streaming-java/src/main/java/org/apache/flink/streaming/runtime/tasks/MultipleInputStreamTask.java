@@ -18,6 +18,7 @@
 package org.apache.flink.streaming.runtime.tasks;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.runtime.checkpoint.CheckpointException;
 import org.apache.flink.runtime.checkpoint.CheckpointMetaData;
 import org.apache.flink.runtime.checkpoint.CheckpointMetricsBuilder;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
@@ -168,9 +169,7 @@ public class MultipleInputStreamTask<OUT>
 
     @Override
     public Future<Boolean> triggerCheckpointAsync(
-            CheckpointMetaData metadata,
-            CheckpointOptions options,
-            boolean advanceToEndOfEventTime) {
+            CheckpointMetaData metadata, CheckpointOptions options) {
 
         CompletableFuture<Boolean> resultFuture = new CompletableFuture<>();
         mainMailboxExecutor.execute(
@@ -250,7 +249,8 @@ public class MultipleInputStreamTask<OUT>
     }
 
     @Override
-    public void abortCheckpointOnBarrier(long checkpointId, Throwable cause) throws IOException {
+    public void abortCheckpointOnBarrier(long checkpointId, CheckpointException cause)
+            throws IOException {
         CompletableFuture<Boolean> resultFuture =
                 pendingCheckpointCompletedFutures.remove(checkpointId);
         if (resultFuture != null) {

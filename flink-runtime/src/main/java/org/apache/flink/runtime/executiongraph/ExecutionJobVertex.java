@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.executiongraph;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.Archiveable;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.JobID;
@@ -82,13 +83,13 @@ public class ExecutionJobVertex
         implements AccessExecutionJobVertex, Archiveable<ArchivedExecutionJobVertex> {
 
     /** Use the same log for all ExecutionGraph classes. */
-    private static final Logger LOG = ExecutionGraph.LOG;
+    private static final Logger LOG = DefaultExecutionGraph.LOG;
 
     public static final int VALUE_NOT_SET = -1;
 
     private final Object stateMonitor = new Object();
 
-    private final ExecutionGraph graph;
+    private final InternalExecutionGraphAccessor graph;
 
     private final JobVertex jobVertex;
 
@@ -124,8 +125,9 @@ public class ExecutionJobVertex
 
     private InputSplitAssigner splitAssigner;
 
-    ExecutionJobVertex(
-            ExecutionGraph graph,
+    @VisibleForTesting
+    public ExecutionJobVertex(
+            InternalExecutionGraphAccessor graph,
             JobVertex jobVertex,
             int defaultParallelism,
             int maxPriorAttemptsHistoryLength,
@@ -295,7 +297,7 @@ public class ExecutionJobVertex
         this.maxParallelism = maxParallelism;
     }
 
-    public ExecutionGraph getGraph() {
+    public InternalExecutionGraphAccessor getGraph() {
         return graph;
     }
 

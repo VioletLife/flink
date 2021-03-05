@@ -33,7 +33,9 @@ import org.apache.flink.runtime.io.network.partition.JobMasterPartitionTracker;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobmaster.ExecutionDeploymentTracker;
 import org.apache.flink.runtime.jobmaster.slotpool.SlotPool;
+import org.apache.flink.runtime.jobmaster.slotpool.SlotPoolService;
 import org.apache.flink.runtime.metrics.groups.JobManagerJobMetricGroup;
+import org.apache.flink.runtime.rpc.FatalErrorHandler;
 import org.apache.flink.runtime.shuffle.ShuffleMaster;
 
 import org.slf4j.Logger;
@@ -52,7 +54,7 @@ public class DefaultSchedulerFactory implements SchedulerNGFactory {
             final JobGraph jobGraph,
             final Executor ioExecutor,
             final Configuration jobMasterConfiguration,
-            final SlotPool slotPool,
+            final SlotPoolService slotPoolService,
             final ScheduledExecutorService futureExecutor,
             final ClassLoader userCodeLoader,
             final CheckpointRecoveryFactory checkpointRecoveryFactory,
@@ -65,12 +67,21 @@ public class DefaultSchedulerFactory implements SchedulerNGFactory {
             final ExecutionDeploymentTracker executionDeploymentTracker,
             long initializationTimestamp,
             final ComponentMainThreadExecutor mainThreadExecutor,
+            final FatalErrorHandler fatalErrorHandler,
             final JobStatusListener jobStatusListener)
             throws Exception {
 
+        final SlotPool slotPool =
+                slotPoolService
+                        .castInto(SlotPool.class)
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "The DefaultScheduler requires a SlotPool."));
+
         final DefaultSchedulerComponents schedulerComponents =
                 createSchedulerComponents(
-                        jobGraph.getScheduleMode(),
+                        jobGraph.getJobType(),
                         jobGraph.isApproximateLocalRecoveryEnabled(),
                         jobMasterConfiguration,
                         slotPool,

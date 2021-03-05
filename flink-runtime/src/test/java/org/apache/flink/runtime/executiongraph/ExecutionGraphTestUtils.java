@@ -26,7 +26,6 @@ import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
-import org.apache.flink.runtime.jobgraph.ScheduleMode;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.jobmanager.scheduler.SlotSharingGroup;
 import org.apache.flink.runtime.jobmaster.LogicalSlot;
@@ -327,13 +326,16 @@ public class ExecutionGraphTestUtils {
         checkNotNull(vertices);
         checkNotNull(timeout);
 
-        return TestingExecutionGraphBuilder.newBuilder()
-                .setJobGraph(new JobGraph(vertices))
-                .setFutureExecutor(executor)
-                .setIoExecutor(executor)
-                .setAllocationTimeout(timeout)
-                .setRpcTimeout(timeout)
-                .build();
+        ExecutionGraph executionGraph =
+                TestingDefaultExecutionGraphBuilder.newBuilder()
+                        .setJobGraph(new JobGraph(vertices))
+                        .setFutureExecutor(executor)
+                        .setIoExecutor(executor)
+                        .setAllocationTimeout(timeout)
+                        .setRpcTimeout(timeout)
+                        .build();
+        executionGraph.start(ComponentMainThreadExecutorServiceAdapter.forMainThread());
+        return executionGraph;
     }
 
     public static JobVertex createNoOpVertex(int parallelism) {
@@ -365,22 +367,15 @@ public class ExecutionGraphTestUtils {
 
     public static ExecutionJobVertex getExecutionJobVertex(
             JobVertexID id, ScheduledExecutorService executor) throws Exception {
-        return getExecutionJobVertex(id, executor, ScheduleMode.LAZY_FROM_SOURCES);
-    }
 
-    public static ExecutionJobVertex getExecutionJobVertex(
-            JobVertexID id, ScheduledExecutorService executor, ScheduleMode scheduleMode)
-            throws Exception {
-
-        return getExecutionJobVertex(id, 1, null, executor, scheduleMode);
+        return getExecutionJobVertex(id, 1, null, executor);
     }
 
     public static ExecutionJobVertex getExecutionJobVertex(
             JobVertexID id,
             int parallelism,
             @Nullable SlotSharingGroup slotSharingGroup,
-            ScheduledExecutorService executor,
-            ScheduleMode scheduleMode)
+            ScheduledExecutorService executor)
             throws Exception {
 
         JobVertex ajv = new JobVertex("TestVertex", id);
@@ -390,20 +385,17 @@ public class ExecutionGraphTestUtils {
             ajv.setSlotSharingGroup(slotSharingGroup);
         }
 
-        return getExecutionJobVertex(ajv, executor, scheduleMode);
+        return getExecutionJobVertex(ajv, executor);
     }
 
     public static ExecutionJobVertex getExecutionJobVertex(JobVertex jobVertex) throws Exception {
-        return getExecutionJobVertex(
-                jobVertex, new DirectScheduledExecutorService(), ScheduleMode.LAZY_FROM_SOURCES);
+        return getExecutionJobVertex(jobVertex, new DirectScheduledExecutorService());
     }
 
     public static ExecutionJobVertex getExecutionJobVertex(
-            JobVertex jobVertex, ScheduledExecutorService executor, ScheduleMode scheduleMode)
-            throws Exception {
+            JobVertex jobVertex, ScheduledExecutorService executor) throws Exception {
 
         JobGraph jobGraph = new JobGraph(jobVertex);
-        jobGraph.setScheduleMode(scheduleMode);
 
         SchedulerBase scheduler =
                 SchedulerTestingUtils.newSchedulerBuilder(
@@ -438,11 +430,7 @@ public class ExecutionGraphTestUtils {
 
         final ExecutionJobVertex ejv =
                 getExecutionJobVertex(
-                        jid,
-                        numTasks,
-                        slotSharingGroup,
-                        new DirectScheduledExecutorService(),
-                        ScheduleMode.LAZY_FROM_SOURCES);
+                        jid, numTasks, slotSharingGroup, new DirectScheduledExecutorService());
 
         return ejv.getTaskVertices()[subtaskIndex].getCurrentExecutionAttempt();
     }
