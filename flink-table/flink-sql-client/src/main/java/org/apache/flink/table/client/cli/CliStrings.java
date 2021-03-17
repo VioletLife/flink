@@ -89,7 +89,7 @@ public final class CliStrings {
                     .append(
                             formatCommand(
                                     SqlCommand.SHOW_FUNCTIONS,
-                                    "Shows all user-defined and built-in functions."))
+                                    "Shows all user-defined and built-in functions or only user-defined functions. Syntax: 'SHOW [USER] FUNCTIONS;'"))
                     .append(formatCommand(SqlCommand.SHOW_TABLES, "Shows all registered tables."))
                     .append(
                             formatCommand(
@@ -225,6 +225,8 @@ public final class CliStrings {
 
     public static final String MESSAGE_DATABASE_REMOVED = "Database has been removed.";
 
+    public static final String MESSAGE_DATABASE_CHANGED = "Database changed.";
+
     public static final String MESSAGE_ALTER_DATABASE_SUCCEEDED = "Alter database succeeded!";
 
     public static final String MESSAGE_ALTER_DATABASE_FAILED = "Alter database failed!";
@@ -232,6 +234,8 @@ public final class CliStrings {
     public static final String MESSAGE_CATALOG_CREATED = "Catalog has been created.";
 
     public static final String MESSAGE_CATALOG_REMOVED = "Catalog has been removed.";
+
+    public static final String MESSAGE_CATALOG_CHANGED = "Catalog changed.";
 
     public static final String MESSAGE_LOAD_MODULE_SUCCEEDED = "Load module succeeded!";
 

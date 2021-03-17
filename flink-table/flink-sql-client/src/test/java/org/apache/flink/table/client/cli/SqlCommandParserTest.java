@@ -329,6 +329,27 @@ public class SqlCommandParserTest {
                                 "USE MODULES",
                                 SqlExecutionException.class,
                                 "Encountered \"<EOF>\""),
+                        // show modules
+                        TestItem.validSql("SHOW MODULES", SqlCommand.SHOW_MODULES, "SHOW MODULES"),
+                        // show full modules
+                        TestItem.validSql(
+                                "SHOW FULL MODULES", SqlCommand.SHOW_MODULES, "SHOW FULL MODULES"),
+                        // show functions
+                        TestItem.validSql(
+                                "SHOW FUNCTIONS;", SqlCommand.SHOW_FUNCTIONS, "SHOW FUNCTIONS"),
+                        TestItem.validSql(
+                                "  SHOW FUNCTIONS   ;",
+                                SqlCommand.SHOW_FUNCTIONS,
+                                "SHOW FUNCTIONS"),
+                        // show user functions
+                        TestItem.validSql(
+                                "SHOW USER FUNCTIONS;",
+                                SqlCommand.SHOW_FUNCTIONS,
+                                "SHOW USER FUNCTIONS"),
+                        TestItem.validSql(
+                                "  SHOW USER FUNCTIONS   ;",
+                                SqlCommand.SHOW_FUNCTIONS,
+                                "SHOW USER FUNCTIONS"),
                         // Test create function.
                         TestItem.invalidSql(
                                 "CREATE FUNCTION ",

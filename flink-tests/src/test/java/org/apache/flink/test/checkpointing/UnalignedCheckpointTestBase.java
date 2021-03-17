@@ -27,6 +27,7 @@ import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.state.CheckpointListener;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.time.Deadline;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.api.connector.source.ReaderOutput;
@@ -38,6 +39,7 @@ import org.apache.flink.api.connector.source.SourceSplit;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.apache.flink.api.connector.source.SplitsAssignment;
+import org.apache.flink.configuration.AkkaOptions;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
@@ -61,6 +63,7 @@ import org.apache.flink.util.Collector;
 import org.apache.flink.util.TestLogger;
 
 import org.apache.flink.shaded.guava18.com.google.common.collect.Iterables;
+import org.apache.flink.shaded.netty4.io.netty.util.internal.PlatformDependent;
 
 import org.junit.Rule;
 import org.junit.experimental.categories.Category;
@@ -76,10 +79,13 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -89,10 +95,10 @@ import static org.apache.flink.util.Preconditions.checkState;
 import static org.junit.Assert.fail;
 
 /** Base class for tests related to unaligned checkpoints. */
-@Category(FailsWithAdaptiveScheduler.class) // FLINK-21400
+@Category(FailsWithAdaptiveScheduler.class) // FLINK-21689
 public abstract class UnalignedCheckpointTestBase extends TestLogger {
     protected static final Logger LOG = LoggerFactory.getLogger(UnalignedCheckpointTestBase.class);
-    protected static final String NUM_INPUTS = "inputs";
+    protected static final String NUM_INPUTS = "inputs_";
     protected static final String NUM_OUTPUTS = "outputs";
     protected static final String NUM_OUT_OF_ORDER = "outOfOrder";
     protected static final String NUM_FAILURES = "failures";
@@ -100,7 +106,7 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
     protected static final String NUM_LOST = "lost";
     protected static final int BUFFER_PER_CHANNEL = 1;
     /** For multi-gate tests. */
-    protected static final int NUM_SOURCES = 2;
+    protected static final int NUM_SOURCES = 3;
 
     private static final long HEADER = 0xABCDEAFCL << 32;
     private static final long HEADER_MASK = 0xFFFFFFFFL << 32;
@@ -120,6 +126,7 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
                 settings.slotSharing,
                 settings.expectedFailures - settings.failuresAfterSourceFinishes);
         try {
+            waitForCleanShutdown();
             final JobExecutionResult result = env.execute();
 
             checkCounters(result);
@@ -144,13 +151,31 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
         return null;
     }
 
-    protected abstract void checkCounters(JobExecutionResult result);
-
-    protected static int getNumBuffers(int parallelism, int numShuffles) {
-        // p + 1 buffer on output side + input side including recovery (=local channels count fully)
-        int buffersPerSubtask = parallelism + 1 + 2 * BUFFER_PER_CHANNEL * parallelism;
-        return buffersPerSubtask * parallelism * numShuffles;
+    private void waitForCleanShutdown() throws InterruptedException {
+        // direct memory in netty will be freed through gc/finalization
+        // too many successive executions will lead to OOM by netty
+        // slow down when half the memory is taken and wait for gc
+        if (PlatformDependent.usedDirectMemory() > PlatformDependent.maxDirectMemory() / 2) {
+            final Duration waitTime = Duration.ofSeconds(10);
+            Deadline deadline = Deadline.fromNow(waitTime);
+            while (PlatformDependent.usedDirectMemory() > 0 && deadline.hasTimeLeft()) {
+                System.gc();
+                Thread.sleep(100);
+            }
+            final Duration timeLeft = deadline.timeLeft();
+            if (timeLeft.isNegative()) {
+                LOG.warn(
+                        "Waited 10s for clean shutdown of previous runs but there is still direct memory in use: "
+                                + PlatformDependent.usedDirectMemory());
+            } else {
+                LOG.info(
+                        "Needed to wait {} ms for full cleanup of previous runs.",
+                        waitTime.minus(timeLeft).toMillis());
+            }
+        }
     }
+
+    protected abstract void checkCounters(JobExecutionResult result);
 
     /** A source that generates longs in a fixed number of splits. */
     protected static class LongSource
@@ -172,9 +197,6 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
 
         @Override
         public SourceReader<Long, LongSplit> createReader(SourceReaderContext readerContext) {
-            if (readerContext.getIndexOfSubtask() == 0) {
-                readerContext.sendSourceEventToCoordinator(new RestartEvent());
-            }
             return new LongSourceReader(
                     readerContext.getIndexOfSubtask(), minCheckpoints, expectedRestarts);
         }
@@ -186,7 +208,7 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
                     IntStream.range(0, numSplits)
                             .mapToObj(i -> new LongSplit(i, numSplits))
                             .collect(Collectors.toList());
-            return new LongSplitSplitEnumerator(enumContext, new EnumeratorState(splits, -1, 0));
+            return new LongSplitSplitEnumerator(enumContext, new EnumeratorState(splits, 0, 0));
         }
 
         @Override
@@ -207,10 +229,10 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
 
         private static class LongSourceReader implements SourceReader<Long, LongSplit> {
             private final int subtaskIndex;
-            private final long minCheckpoints;
+            private final int minCheckpoints;
             private final int expectedRestarts;
             private final LongCounter numInputsCounter = new LongCounter();
-            private List<LongSplit> splits = new ArrayList<>();
+            private final List<LongSplit> splits = new ArrayList<>();
             private int numAbortedCheckpoints;
             private int numRestarts;
             private int numCompletedCheckpoints;
@@ -284,12 +306,12 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
 
             @Override
             public void notifyCheckpointAborted(long checkpointId) {
-                if (numAbortedCheckpoints++ > 10) {
+                if (numAbortedCheckpoints++ > 100) {
                     // aborted too many checkpoints in a row, which usually indicates that part of
                     // the pipeline is already completed
                     // here simply also advance completed checkpoints to avoid running into a live
                     // lock
-                    numCompletedCheckpoints++;
+                    numCompletedCheckpoints = minCheckpoints + 1;
                     updatePollingState();
                 }
             }
@@ -329,7 +351,7 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
                     pollingState = PollingState.PUMPING;
                 }
                 if (oldState != pollingState) {
-                    LOG.debug(
+                    LOG.info(
                             "Switched from {} to {} @ {} subtask ({} attempt)",
                             oldState,
                             pollingState,
@@ -362,16 +384,11 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
             }
         }
 
-        private static class RestartEvent implements SourceEvent {
-
-            private RestartEvent() {}
-        }
-
         private static class SyncEvent implements SourceEvent {
             final int numRestarts;
             final int numCheckpoints;
 
-            private SyncEvent(int numRestarts, int numCheckpoints) {
+            SyncEvent(int numRestarts, int numCheckpoints) {
                 this.numRestarts = numRestarts;
                 this.numCheckpoints = numCheckpoints;
             }
@@ -405,6 +422,7 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
                 implements SplitEnumerator<LongSplit, EnumeratorState> {
             private final SplitEnumeratorContext<LongSplit> context;
             private final EnumeratorState state;
+            private final Map<Integer, Integer> subtaskRestarts = new HashMap<>();
 
             private LongSplitSplitEnumerator(
                     SplitEnumeratorContext<LongSplit> context, EnumeratorState state) {
@@ -416,26 +434,16 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
             public void start() {}
 
             @Override
-            public void handleSourceEvent(int subtaskId, SourceEvent sourceEvent) {
-                if (sourceEvent instanceof RestartEvent) {
-                    state.numRestarts++;
-                    final SyncEvent event =
-                            new SyncEvent(state.numRestarts, state.numCompletedCheckpoints);
-                    context.registeredReaders()
-                            .keySet()
-                            .forEach(index -> context.sendEventToSourceReader(index, event));
-                }
-            }
-
-            @Override
             public void handleSplitRequest(int subtaskId, @Nullable String requesterHostname) {}
 
             @Override
             public void addSplitsBack(List<LongSplit> splits, int subtaskId) {
-                if (!splits.isEmpty()) {
-                    LOG.info("addSplitsBack {}", splits);
-                    state.unassignedSplits.addAll(splits);
-                }
+                LOG.info("addSplitsBack {}", splits);
+                // Called on recovery
+                subtaskRestarts.compute(
+                        subtaskId,
+                        (id, oldCount) -> oldCount == null ? state.numRestarts + 1 : oldCount + 1);
+                state.unassignedSplits.addAll(splits);
             }
 
             @Override
@@ -450,9 +458,19 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
                         state.unassignedSplits.clear();
                     }
                     context.registeredReaders().keySet().forEach(context::signalNoMoreSplits);
+                    Optional<Integer> restarts =
+                            subtaskRestarts.values().stream().max(Comparator.naturalOrder());
+                    if (restarts.isPresent() && restarts.get() > state.numRestarts) {
+                        state.numRestarts = restarts.get();
+                        // Implicitly sync the restart count of all subtasks with state.numRestarts
+                        subtaskRestarts.clear();
+                        final SyncEvent event =
+                                new SyncEvent(state.numRestarts, state.numCompletedCheckpoints);
+                        context.registeredReaders()
+                                .keySet()
+                                .forEach(index -> context.sendEventToSourceReader(index, event));
+                    }
                 }
-                context.sendEventToSourceReader(
-                        subtaskId, new SyncEvent(state.numRestarts, state.numCompletedCheckpoints));
             }
 
             @Override
@@ -471,9 +489,9 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
         }
 
         private static class EnumeratorState {
-            private final List<LongSplit> unassignedSplits;
-            private int numRestarts;
-            private int numCompletedCheckpoints;
+            final List<LongSplit> unassignedSplits;
+            int numRestarts;
+            int numCompletedCheckpoints;
 
             public EnumeratorState(
                     List<LongSplit> unassignedSplits,
@@ -580,7 +598,6 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
         @Nullable private File restoreCheckpoint;
         private boolean generateCheckpoint = false;
         private int numSlots;
-        private int numBuffers;
         int expectedFailures = 0;
         private final DagCreator dagCreator;
         private int alignmentTimeout = 0;
@@ -620,11 +637,6 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
             return this;
         }
 
-        public UnalignedSettings setNumBuffers(int numBuffers) {
-            this.numBuffers = numBuffers;
-            return this;
-        }
-
         public UnalignedSettings setExpectedFailures(int expectedFailures) {
             this.expectedFailures = expectedFailures;
             return this;
@@ -648,9 +660,6 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
             final int taskManagers = (numSlots + slotsPerTaskManager - 1) / slotsPerTaskManager;
             conf.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, taskManagers);
             conf.set(TaskManagerOptions.MEMORY_SEGMENT_SIZE, MemorySize.parse("4kb"));
-            conf.set(
-                    TaskManagerOptions.NETWORK_MEMORY_MAX, MemorySize.parse(numBuffers * 4 + "kb"));
-
             conf.setString(CheckpointingOptions.STATE_BACKEND, "filesystem");
             conf.setString(
                     CheckpointingOptions.CHECKPOINTS_DIRECTORY, checkpointDir.toURI().toString());
@@ -666,6 +675,7 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
                     NettyShuffleEnvironmentOptions.NETWORK_EXTRA_BUFFERS_PER_GATE,
                     slotsPerTaskManager);
             conf.set(NettyShuffleEnvironmentOptions.NETWORK_REQUEST_BACKOFF_MAX, 60000);
+            conf.setString(AkkaOptions.ASK_TIMEOUT, "1 min");
 
             final LocalStreamEnvironment env =
                     StreamExecutionEnvironment.createLocalEnvironment(parallelism, conf);
@@ -907,12 +917,15 @@ public abstract class UnalignedCheckpointTestBase extends TestLogger {
         @Override
         public void notifyCheckpointComplete(long checkpointId) {
             state.completedCheckpoints++;
-            backpressure = state.completedCheckpoints < minCheckpoints;
-            LOG.info(
-                    "Inducing backpressure={} @ {} subtask ({} attempt)",
-                    backpressure,
-                    getRuntimeContext().getIndexOfThisSubtask(),
-                    getRuntimeContext().getAttemptNumber());
+            boolean backpressure = this.backpressure;
+            this.backpressure = state.completedCheckpoints < minCheckpoints;
+            if (backpressure != this.backpressure) {
+                LOG.info(
+                        "Inducing backpressure={} @ {} subtask ({} attempt)",
+                        this.backpressure,
+                        getRuntimeContext().getIndexOfThisSubtask(),
+                        getRuntimeContext().getAttemptNumber());
+            }
         }
 
         @Override

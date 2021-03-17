@@ -250,8 +250,8 @@ public class FlinkHiveSqlParserImplTest extends SqlParserTest {
 
     @Test
     public void testShowFunctions() {
-        // TODO: support SHOW FUNCTIONS LIKE 'regex_pattern'
         sql("show functions").ok("SHOW FUNCTIONS");
+        sql("show user functions").ok("SHOW USER FUNCTIONS");
     }
 
     @Test
@@ -465,5 +465,12 @@ public class FlinkHiveSqlParserImplTest extends SqlParserTest {
 
         sql("use modules ^'hive'^")
                 .fails("(?s).*Encountered \"\\\\'hive\\\\'\" at line 1, column 13.\n.*");
+    }
+
+    @Test
+    public void testShowModules() {
+        sql("show modules").ok("SHOW MODULES");
+
+        sql("show full modules").ok("SHOW FULL MODULES");
     }
 }

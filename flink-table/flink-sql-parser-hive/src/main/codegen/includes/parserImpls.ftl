@@ -1035,18 +1035,22 @@ SqlDrop SqlDropFunction(Span s, boolean replace) :
 }
 
 /**
- * Hive syntax:
- *
- * SHOW FUNCTIONS [LIKE "<pattern>"];
- */
+* Parses a show functions statement.
+* SHOW [USER] FUNCTIONS;
+*/
 SqlShowFunctions SqlShowFunctions() :
 {
     SqlParserPos pos;
+    boolean requireUser = false;
 }
 {
-    <SHOW> <FUNCTIONS> { pos = getPos();}
+    <SHOW> { pos = getPos();}
+    [
+        <USER> { requireUser = true; }
+    ]
+    <FUNCTIONS>
     {
-        return new SqlShowFunctions(pos, null);
+        return new SqlShowFunctions(pos.plus(getPos()), requireUser);
     }
 }
 
@@ -1579,5 +1583,25 @@ SqlUseModules SqlUseModules() :
     ]
     {
         return new SqlUseModules(s.end(this), moduleNames);
+    }
+}
+
+/**
+* Parses a show modules statement.
+* SHOW [FULL] MODULES;
+*/
+SqlShowModules SqlShowModules() :
+{
+    SqlParserPos startPos;
+    boolean requireFull = false;
+}
+{
+    <SHOW> { startPos = getPos(); }
+    [
+      <FULL> { requireFull = true; }
+    ]
+    <MODULES>
+    {
+        return new SqlShowModules(startPos.plus(getPos()), requireFull);
     }
 }

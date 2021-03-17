@@ -23,7 +23,9 @@ import org.apache.flink.api.common.time.Deadline;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutorServiceAdapter;
 import org.apache.flink.runtime.execution.ExecutionState;
+import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
 import org.apache.flink.runtime.jobgraph.JobGraph;
+import org.apache.flink.runtime.jobgraph.JobGraphTestUtils;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
@@ -31,6 +33,7 @@ import org.apache.flink.runtime.jobmanager.scheduler.SlotSharingGroup;
 import org.apache.flink.runtime.jobmaster.LogicalSlot;
 import org.apache.flink.runtime.scheduler.SchedulerBase;
 import org.apache.flink.runtime.scheduler.SchedulerTestingUtils;
+import org.apache.flink.runtime.scheduler.strategy.ConsumedPartitionGroup;
 import org.apache.flink.runtime.scheduler.strategy.ExecutionVertexID;
 import org.apache.flink.runtime.testingUtils.TestingUtils;
 import org.apache.flink.runtime.testtasks.NoOpInvokable;
@@ -328,7 +331,7 @@ public class ExecutionGraphTestUtils {
 
         ExecutionGraph executionGraph =
                 TestingDefaultExecutionGraphBuilder.newBuilder()
-                        .setJobGraph(new JobGraph(vertices))
+                        .setJobGraph(JobGraphTestUtils.streamingJobGraph(vertices))
                         .setFutureExecutor(executor)
                         .setIoExecutor(executor)
                         .setAllocationTimeout(timeout)
@@ -395,7 +398,7 @@ public class ExecutionGraphTestUtils {
     public static ExecutionJobVertex getExecutionJobVertex(
             JobVertex jobVertex, ScheduledExecutorService executor) throws Exception {
 
-        JobGraph jobGraph = new JobGraph(jobVertex);
+        JobGraph jobGraph = JobGraphTestUtils.batchJobGraph(jobVertex);
 
         SchedulerBase scheduler =
                 SchedulerTestingUtils.newSchedulerBuilder(
@@ -497,13 +500,14 @@ public class ExecutionGraphTestUtils {
                 assertEquals(inputJobVertices.size(), ev.getNumberOfInputs());
 
                 for (int i = 0; i < inputJobVertices.size(); i++) {
-                    ExecutionEdge[] inputEdges = ev.getInputEdges(i);
-                    assertEquals(inputJobVertices.get(i).getParallelism(), inputEdges.length);
+                    ConsumedPartitionGroup consumedPartitions = ev.getConsumedPartitions(i);
+                    assertEquals(
+                            inputJobVertices.get(i).getParallelism(), consumedPartitions.size());
 
                     int expectedPartitionNum = 0;
-                    for (ExecutionEdge inEdge : inputEdges) {
-                        assertEquals(i, inEdge.getInputNum());
-                        assertEquals(expectedPartitionNum, inEdge.getSource().getPartitionNumber());
+                    for (IntermediateResultPartitionID consumedPartitionId : consumedPartitions) {
+                        assertEquals(
+                                expectedPartitionNum, consumedPartitionId.getPartitionNumber());
 
                         expectedPartitionNum++;
                     }

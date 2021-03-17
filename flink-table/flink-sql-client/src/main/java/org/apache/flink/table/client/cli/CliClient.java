@@ -26,6 +26,7 @@ import org.apache.flink.table.client.gateway.Executor;
 import org.apache.flink.table.client.gateway.ResultDescriptor;
 import org.apache.flink.table.client.gateway.SqlExecutionException;
 import org.apache.flink.table.utils.PrintUtils;
+import org.apache.flink.types.Row;
 import org.apache.flink.util.CollectionUtil;
 
 import org.jline.reader.EndOfFileException;
@@ -41,6 +42,8 @@ import org.jline.utils.AttributedStyle;
 import org.jline.utils.InfoCmp;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.io.IOError;
 import java.io.IOException;
@@ -72,6 +75,8 @@ public class CliClient implements AutoCloseable {
 
     private final String prompt;
 
+    private final @Nullable MaskingCallback inputTransformer;
+
     private boolean isRunning;
 
     private static final int PLAIN_TERMINAL_WIDTH = 80;
@@ -85,10 +90,16 @@ public class CliClient implements AutoCloseable {
      * using {@link #close()}.
      */
     @VisibleForTesting
-    public CliClient(Terminal terminal, String sessionId, Executor executor, Path historyFilePath) {
+    public CliClient(
+            Terminal terminal,
+            String sessionId,
+            Executor executor,
+            Path historyFilePath,
+            @Nullable MaskingCallback inputTransformer) {
         this.terminal = terminal;
         this.sessionId = sessionId;
         this.executor = executor;
+        this.inputTransformer = inputTransformer;
 
         // make space from previous output and test the writer
         terminal.writer().println();
@@ -137,7 +148,7 @@ public class CliClient implements AutoCloseable {
      * afterwards using {@link #close()}.
      */
     public CliClient(String sessionId, Executor executor, Path historyFilePath) {
-        this(createDefaultTerminal(), sessionId, executor, historyFilePath);
+        this(createDefaultTerminal(), sessionId, executor, historyFilePath, null);
     }
 
     public Terminal getTerminal() {
@@ -197,7 +208,7 @@ public class CliClient implements AutoCloseable {
 
             final String line;
             try {
-                line = lineReader.readLine(prompt, null, (MaskingCallback) null, null);
+                line = lineReader.readLine(prompt, null, inputTransformer, null);
             } catch (UserInterruptException e) {
                 // user cancelled line with Ctrl+C
                 continue;
@@ -301,10 +312,10 @@ public class CliClient implements AutoCloseable {
                 callShowViews();
                 break;
             case SHOW_FUNCTIONS:
-                callShowFunctions();
+                callShowFunctions(cmdCall);
                 break;
             case SHOW_MODULES:
-                callShowModules();
+                callShowModules(cmdCall);
                 break;
             case SHOW_PARTITIONS:
                 callShowPartitions(cmdCall);
@@ -486,11 +497,8 @@ public class CliClient implements AutoCloseable {
     private void callShowCurrentCatalog() {
         String currentCatalog;
         try {
-            currentCatalog =
-                    executor.executeSql(sessionId, "SHOW CURRENT CATALOG")
-                            .collect()
-                            .next()
-                            .toString();
+            Row result = executor.executeSql(sessionId, "SHOW CURRENT CATALOG").collect().next();
+            currentCatalog = checkNotNull(result.getField(0)).toString();
         } catch (SqlExecutionException e) {
             printExecutionException(e);
             return;
@@ -518,11 +526,8 @@ public class CliClient implements AutoCloseable {
     private void callShowCurrentDatabase() {
         String currentDatabase;
         try {
-            currentDatabase =
-                    executor.executeSql(sessionId, "SHOW CURRENT DATABASE")
-                            .collect()
-                            .next()
-                            .toString();
+            Row result = executor.executeSql(sessionId, "SHOW CURRENT DATABASE").collect().next();
+            currentDatabase = checkNotNull(result.getField(0)).toString();
         } catch (SqlExecutionException e) {
             printExecutionException(e);
             return;
@@ -563,10 +568,10 @@ public class CliClient implements AutoCloseable {
         terminal.flush();
     }
 
-    private void callShowFunctions() {
+    private void callShowFunctions(SqlCommandCall cmdCall) {
         final List<String> functions;
         try {
-            functions = getShowResult("FUNCTIONS");
+            functions = getShowResult(cmdCall);
         } catch (SqlExecutionException e) {
             printExecutionException(e);
             return;
@@ -594,21 +599,8 @@ public class CliClient implements AutoCloseable {
                 .collect(Collectors.toList());
     }
 
-    private void callShowModules() {
-        final List<String> modules;
-        try {
-            modules = executor.listModules(sessionId);
-        } catch (SqlExecutionException e) {
-            printExecutionException(e);
-            return;
-        }
-        if (modules.isEmpty()) {
-            terminal.writer().println(CliStrings.messageInfo(CliStrings.MESSAGE_EMPTY).toAnsi());
-        } else {
-            // modules are already in the loaded order
-            modules.forEach((v) -> terminal.writer().println(v));
-        }
-        terminal.flush();
+    private void callShowModules(SqlCommandCall cmdCall) {
+        getResultAsTableauForm(cmdCall.operands[0]);
     }
 
     private void callShowPartitions(SqlCommandCall cmdCall) {
@@ -629,35 +621,41 @@ public class CliClient implements AutoCloseable {
 
     private void callUseCatalog(SqlCommandCall cmdCall) {
         try {
-            executor.executeSql(sessionId, "USE CATALOG " + cmdCall.operands[0]);
+            executor.executeSql(sessionId, "USE CATALOG `" + cmdCall.operands[0] + "`");
         } catch (SqlExecutionException e) {
             printExecutionException(e);
             return;
         }
+        printInfo(CliStrings.MESSAGE_CATALOG_CHANGED);
         terminal.flush();
     }
 
     private void callUseDatabase(SqlCommandCall cmdCall) {
         try {
-            executor.executeSql(sessionId, "USE " + cmdCall.operands[0]);
+            executor.executeSql(sessionId, "USE `" + cmdCall.operands[0] + "`");
         } catch (SqlExecutionException e) {
             printExecutionException(e);
             return;
         }
+        printInfo(CliStrings.MESSAGE_DATABASE_CHANGED);
         terminal.flush();
     }
 
     private void callDescribe(SqlCommandCall cmdCall) {
-        final TableResult tableResult;
+        getResultAsTableauForm("DESCRIBE " + cmdCall.operands[0]);
+    }
+
+    private void getResultAsTableauForm(String statement) {
+        final TableResult result;
         try {
-            tableResult = executor.executeSql(sessionId, "DESCRIBE " + cmdCall.operands[0]);
+            result = executor.executeSql(sessionId, statement);
         } catch (SqlExecutionException e) {
             printExecutionException(e);
             return;
         }
         PrintUtils.printAsTableauForm(
-                tableResult.getTableSchema(),
-                tableResult.collect(),
+                result.getTableSchema(),
+                result.collect(),
                 terminal.writer(),
                 Integer.MAX_VALUE,
                 "",

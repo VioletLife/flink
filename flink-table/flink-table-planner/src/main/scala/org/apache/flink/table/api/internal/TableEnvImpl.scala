@@ -37,7 +37,8 @@ import org.apache.flink.table.functions.{AggregateFunction, ScalarFunction, Tabl
 import org.apache.flink.table.module.{Module, ModuleEntry, ModuleManager}
 import org.apache.flink.table.operations.ddl._
 import org.apache.flink.table.operations.utils.OperationTreeBuilder
-import org.apache.flink.table.operations.{CatalogQueryOperation, TableSourceQueryOperation, _}
+import org.apache.flink.table.operations.{CatalogQueryOperation, ShowFunctionsOperation, TableSourceQueryOperation, _}
+import org.apache.flink.table.operations.ShowFunctionsOperation.FunctionScope
 import org.apache.flink.table.planner.{ParserImpl, PlanningConfigurationBuilder}
 import org.apache.flink.table.sinks.{BatchSelectTableSink, BatchTableSink, OutputFormatTableSink, OverwritableTableSink, PartitionableTableSink, TableSink, TableSinkUtils}
 import org.apache.flink.table.sources.TableSource
@@ -135,7 +136,9 @@ abstract class TableEnvImpl(
     }
   )
 
-  catalogManager.setCatalogTableSchemaResolver(new CatalogTableSchemaResolver(parser, false))
+  catalogManager.initSchemaResolver(
+    isStreamingMode,
+    operationTreeBuilder.expressionResolverBuilder())
 
   def getConfig: TableConfig = config
 
@@ -456,7 +459,10 @@ abstract class TableEnvImpl(
     val objectIdentifier: ObjectIdentifier = catalogManager.qualifyIdentifier(identifier)
 
     JavaScalaConversionUtil.toScala(catalogManager.getTable(objectIdentifier))
-      .map(t => new CatalogQueryOperation(objectIdentifier, t.getResolvedSchema))
+      .map(t =>
+        new CatalogQueryOperation(
+          objectIdentifier,
+          TableSchema.fromResolvedSchema(t.getResolvedSchema)))
   }
 
   override def listModules(): Array[String] = {
@@ -688,10 +694,10 @@ abstract class TableEnvImpl(
                 alterTableRenameOp.getNewTableIdentifier.getObjectName,
                 false)
             case alterTablePropertiesOp: AlterTableOptionsOperation =>
-              catalog.alterTable(
-                alterTablePropertiesOp.getTableIdentifier.toObjectPath,
+              catalogManager.alterTable(
                 alterTablePropertiesOp.getCatalogTable,
-                false)
+                alterTablePropertiesOp.getTableIdentifier,
+                false);
           }
           TableResultImpl.TABLE_RESULT_OK
         } catch {
@@ -765,8 +771,16 @@ abstract class TableEnvImpl(
         buildShowResult("current database name", Array(catalogManager.getCurrentDatabase))
       case _: ShowTablesOperation =>
         buildShowResult("table name", listTables())
-      case _: ShowFunctionsOperation =>
-        buildShowResult("function name", listFunctions())
+      case showFunctionsOperation: ShowFunctionsOperation =>
+        val functionScope = showFunctionsOperation.getFunctionScope()
+        val functionNames = functionScope match {
+          case FunctionScope.USER => listUserDefinedFunctions()
+          case FunctionScope.ALL => listFunctions()
+          case _ =>
+            throw new UnsupportedOperationException(
+              s"SHOW FUNCTIONS with $functionScope scope is not supported.")
+        }
+        buildShowResult("function name", functionNames)
       case createViewOperation: CreateViewOperation =>
         if (createViewOperation.isTemporary) {
           catalogManager.createTemporaryTable(
@@ -1208,8 +1222,7 @@ abstract class TableEnvImpl(
       if (!exist) {
         functionCatalog.registerTemporarySystemFunction(
           createFunctionOperation.getFunctionName,
-          createFunctionOperation.getFunctionClass,
-          createFunctionOperation.getFunctionLanguage,
+          createFunctionOperation.getCatalogFunction,
           false)
       } else if (!createFunctionOperation.isIgnoreIfExists) {
         throw new ValidationException(
